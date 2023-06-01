@@ -56,7 +56,8 @@ type BucketInfo struct {
 
 // Define a struct to hold failed bucket retrievals
 type FailedBucket struct {
-	Name string
+	Name    string
+	Failure string
 }
 
 func test() {
@@ -98,7 +99,7 @@ func test() {
 		if err != nil {
 			fmt.Printf("Failed to retrieve objects for bucket '%s': %v\n", *bucket.Name, err)
 			// Add the bucket to the failed buckets list
-			failedBuckets = append(failedBuckets, FailedBucket{Name: *bucket.Name})
+			failedBuckets = append(failedBuckets, FailedBucket{Name: *bucket.Name, Failure: err.Error()})
 			continue
 		}
 
