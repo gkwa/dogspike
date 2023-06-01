@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -30,6 +31,11 @@ to quickly create a Cobra application.`,
 		test()
 	},
 }
+
+var (
+	concurrency int
+	lock        sync.Mutex
+)
 
 func init() {
 	rootCmd.AddCommand(testCmd)
@@ -63,114 +69,6 @@ type SuccessBucket struct {
 	Name      string
 	ItemCount int64
 	TotalSize int64
-}
-
-func test() {
-	// Create a new AWS configuration
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-west-2"))
-	if err != nil {
-		fmt.Println("Failed to load AWS configuration:", err)
-		return
-	}
-
-	// Create an S3 client
-	s3Client := s3.NewFromConfig(cfg)
-
-	// Retrieve the list of S3 buckets in the specified region
-	resp, err := s3Client.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
-	if err != nil {
-		fmt.Println("Failed to retrieve S3 buckets:", err)
-		return
-	}
-
-	// Read the list of failed and successful buckets from file
-	failedBuckets, err := readFailedBucketsFromFile()
-	if err != nil {
-		fmt.Println("Failed to read failed buckets from file:", err)
-		return
-	}
-
-	successBuckets, err := readSuccessBucketsFromFile()
-	if err != nil {
-		fmt.Println("Failed to read success buckets from file:", err)
-		// return
-	}
-
-	// Create a slice to hold the bucket information
-	bucketList := make([]BucketInfo, 0)
-
-	// Iterate over each bucket
-	for _, bucket := range resp.Buckets {
-		bucketName := *bucket.Name
-
-		// Skip the bucket if it is in the failed buckets list
-		if containsBucket(failedBuckets, *bucket.Name) || containsBucket(successBuckets, *bucket.Name) {
-			continue
-		}
-
-		// Skip the bucket if it is in the success buckets list
-		if containsBucket(successBuckets, bucketName) {
-			continue
-		}
-
-		itemCount, totalSize, err := getBucketInfo(s3Client, bucketName)
-		if err != nil {
-			fmt.Printf("Failed to retrieve objects for bucket '%s': %v\n", bucketName, err)
-			// Add the bucket to the failed buckets list
-			failedBuckets = append(failedBuckets, FailedBucket{Name: bucketName, Failure: err.Error()})
-			continue
-		}
-
-		// Create a BucketInfo struct and add it to the bucketList
-		bucketInfo := BucketInfo{
-			Name:      bucketName,
-			ItemCount: itemCount,
-			TotalSize: totalSize,
-		}
-
-		bucketList = append(bucketList, bucketInfo)
-
-		// Add the bucket to the success buckets list with metrics
-		successBucket := SuccessBucket{
-			Name:      bucketName,
-			ItemCount: itemCount,
-			TotalSize: totalSize,
-		}
-		successBuckets = append(successBuckets, successBucket)
-
-	}
-
-	// Sort the bucketList by TotalSize in descending order
-	sort.Slice(bucketList, func(i, j int) bool {
-		return bucketList[i].TotalSize > bucketList[j].TotalSize
-	})
-
-	// Print the sorted bucket information
-	for _, bucketInfo := range bucketList {
-		fmt.Printf("Size: ")
-		if bucketInfo.TotalSize >= 1024*1024*1024 {
-			fmt.Printf("%.2f GB, ", float64(bucketInfo.TotalSize)/(1024*1024*1024))
-		} else if bucketInfo.TotalSize >= 1024*1024 {
-			fmt.Printf("%.2f MB, ", float64(bucketInfo.TotalSize)/(1024*1024))
-		} else {
-			fmt.Printf("%s bytes, ", formatBytes(bucketInfo.TotalSize))
-		}
-
-		fmt.Printf("Item Count: %d, ", bucketInfo.ItemCount)
-		fmt.Printf("Bucket Name: %s", bucketInfo.Name)
-		fmt.Println()
-	}
-
-	// Write the updated failed and success buckets lists to file
-	err = writeFailedBucketsToFile(failedBuckets)
-	if err != nil {
-		fmt.Println("Failed to write failed buckets to file:", err)
-	}
-
-	err = writeSuccessBucketsToFile(successBuckets)
-	if err != nil {
-		fmt.Println("Failed to write success buckets to file:", err)
-	}
 }
 
 func getBucketInfo(s3Client *s3.Client, bucketName string) (int64, int64, error) {
@@ -222,8 +120,12 @@ func writeFailedBucketsToFile(failedBuckets []FailedBucket) error {
 	}
 	defer file.Close()
 
-	// Encode the failedBuckets to JSON and write to file
-	err = json.NewEncoder(file).Encode(failedBuckets)
+	data, err := json.MarshalIndent(failedBuckets, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	_, err = file.Write(data)
 	if err != nil {
 		return err
 	}
@@ -299,4 +201,146 @@ func formatBytes(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+func init() {
+	rootCmd.AddCommand(testCmd)
+	testCmd.Flags().IntVarP(&concurrency, "concurrency", "c", 7, "Number of concurrent bucket queries")
+}
+
+func test() {
+	// Create a new AWS configuration
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-west-2"))
+	if err != nil {
+		fmt.Println("Failed to load AWS configuration:", err)
+		return
+	}
+
+	// Create an S3 client
+	s3Client := s3.NewFromConfig(cfg)
+
+	// Retrieve the list of S3 buckets in the specified region
+	resp, err := s3Client.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
+	if err != nil {
+		fmt.Println("Failed to retrieve S3 buckets:", err)
+		return
+	}
+
+	// Read the list of failed and successful buckets from file
+	failedBuckets, err := readFailedBucketsFromFile()
+	if err != nil {
+		fmt.Println("Failed to read failed buckets from file:", err)
+	}
+
+	successBuckets, err := readSuccessBucketsFromFile()
+	if err != nil {
+		fmt.Println("Failed to read success buckets from file:", err)
+	}
+
+	// Create a slice to hold the bucket information
+	bucketList := make([]BucketInfo, 0)
+
+	// Create a channel to receive bucket queries
+	bucketChan := make(chan string)
+
+	// Create a wait group to synchronize goroutines
+	var wg sync.WaitGroup
+
+	// Start worker goroutines to process bucket queries
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for bucketName := range bucketChan {
+				itemCount, totalSize, err := getBucketInfo(s3Client, bucketName)
+				if err != nil {
+					fmt.Printf("Failed to retrieve objects for bucket '%s': %v\n", bucketName, err)
+					// Add the bucket to the failed buckets list
+					failedBuckets = append(failedBuckets, FailedBucket{Name: bucketName, Failure: err.Error()})
+					continue
+				}
+
+				// Create a BucketInfo struct and add it to the bucketList
+				bucketInfo := BucketInfo{
+					Name:      bucketName,
+					ItemCount: itemCount,
+					TotalSize: totalSize,
+				}
+
+				// Lock the bucketList to safely append the bucketInfo
+				// to the list concurrently
+				lock.Lock()
+				bucketList = append(bucketList, bucketInfo)
+				lock.Unlock()
+
+				// Add the bucket to the success buckets list with metrics
+				successBucket := SuccessBucket{
+					Name:      bucketName,
+					ItemCount: itemCount,
+					TotalSize: totalSize,
+				}
+
+				// Lock the successBuckets to safely append the successBucket
+				// to the list concurrently
+				lock.Lock()
+				successBuckets = append(successBuckets, successBucket)
+				lock.Unlock()
+			}
+		}()
+	}
+
+	// Push bucket names to the channel for processing
+	for _, bucket := range resp.Buckets {
+		bucketName := *bucket.Name
+
+		// Skip the bucket if it is in the failed buckets list
+		if containsBucket(failedBuckets, *bucket.Name) || containsBucket(successBuckets, *bucket.Name) {
+			continue
+		}
+
+		// Skip the bucket if it is in the success buckets list
+		if containsBucket(successBuckets, bucketName) {
+			continue
+		}
+
+		bucketChan <- bucketName
+	}
+
+	// Close the bucket channel to signal completion
+	close(bucketChan)
+
+	// Wait for all worker goroutines to finish
+	wg.Wait()
+
+	// Sort the bucketList by TotalSize in descending order
+	sort.Slice(bucketList, func(i, j int) bool {
+		return bucketList[i].TotalSize > bucketList[j].TotalSize
+	})
+
+	// Print the sorted bucket information
+	for _, bucketInfo := range bucketList {
+		fmt.Printf("Size: ")
+		if bucketInfo.TotalSize >= 1024*1024*1024 {
+			fmt.Printf("%.2f GB, ", float64(bucketInfo.TotalSize)/(1024*1024*1024))
+		} else if bucketInfo.TotalSize >= 1024*1024 {
+			fmt.Printf("%.2f MB, ", float64(bucketInfo.TotalSize)/(1024*1024))
+		} else {
+			fmt.Printf("%s bytes, ", formatBytes(bucketInfo.TotalSize))
+		}
+
+		fmt.Printf("Item Count: %d, ", bucketInfo.ItemCount)
+		fmt.Printf("Bucket Name: %s", bucketInfo.Name)
+		fmt.Println()
+	}
+
+	// Write the updated failed and success buckets lists to file
+	err = writeFailedBucketsToFile(failedBuckets)
+	if err != nil {
+		fmt.Println("Failed to write failed buckets to file:", err)
+	}
+
+	err = writeSuccessBucketsToFile(successBuckets)
+	if err != nil {
+		fmt.Println("Failed to write success buckets to file:", err)
+	}
 }
