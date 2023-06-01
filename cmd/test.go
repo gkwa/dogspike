@@ -73,13 +73,37 @@ func test() {
 
 	// Iterate over each bucket
 	for _, bucket := range resp.Buckets {
+		// Create the input for the GetBucketLocation API
+		input := &s3.GetBucketLocationInput{
+			Bucket: bucket.Name,
+		}
+
+		// Call the GetBucketLocation API to retrieve the bucket's region
+		output, err := s3Client.GetBucketLocation(context.TODO(), input)
+		if err != nil {
+			panic("failed to get bucket location: " + err.Error())
+		}
+
+		// Retrieve the region from the output
+		region := output.LocationConstraint
+
+		// Generate the endpoint URL using the region and bucket name
+		endpoint := fmt.Sprintf("https://s3.%s.amazonaws.com/%s", region, *bucket.Name)
+
+		fmt.Println("Bucket Endpoint:", endpoint)
+
+		// Create an S3 client with the custom endpoint
+		client := s3.NewFromConfig(cfg, func(options *s3.Options) {
+			options.EndpointResolver = s3.EndpointResolverFromURL(endpoint)
+		})
+
 		// Create the input for ListObjectsV2 operation
-		input := &s3.ListObjectsV2Input{
+		input2 := &s3.ListObjectsV2Input{
 			Bucket: bucket.Name,
 		}
 
 		// Retrieve the objects in the bucket
-		objectResp, err := s3Client.ListObjectsV2(context.TODO(), input)
+		objectResp, err := client.ListObjectsV2(context.TODO(), input2)
 		if err != nil {
 			fmt.Printf("Failed to retrieve objects for bucket '%s': %v\n", *bucket.Name, err)
 			continue
