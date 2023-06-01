@@ -8,7 +8,6 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/spf13/cobra"
@@ -114,43 +113,6 @@ func test() {
 	}
 }
 
-func doit2(bucketName string) {
-	// Create a new AWS configuration
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-west-2"))
-	if err != nil {
-		fmt.Println("Failed to load AWS configuration:", err)
-		return
-	}
-
-	// Create an S3 client
-	s3Client := s3.NewFromConfig(cfg)
-
-	// Create the input for ListObjectsV2 operation
-	input := &s3.ListObjectsV2Input{
-		Bucket: &bucketName,
-	}
-
-	// Retrieve the objects in the bucket
-	resp, err := s3Client.ListObjectsV2(context.TODO(), input)
-	if err != nil {
-		fmt.Println("Failed to retrieve objects:", err)
-		return
-	}
-
-	// Calculate the summary information
-	totalSize := int64(0)
-	totalObjects := int64(0)
-
-	for _, obj := range resp.Contents {
-		totalSize += obj.Size
-		totalObjects++
-	}
-
-	fmt.Printf("Summary for bucket '%s':\n", bucketName)
-	fmt.Printf("Total Size: %s\n", formatSize(totalSize))
-	fmt.Printf("Total Objects: %d\n", totalObjects)
-}
-
 // Helper function to format the size in a human-readable format
 func formatSize(size int64) string {
 	const unit = 1024
@@ -163,27 +125,4 @@ func formatSize(size int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.2f %ciB", float64(size)/float64(div), "KMGTPE"[exp])
-}
-
-func getBucketInfo(s3Client *s3.Client, bucketName string) (int64, int64, error) {
-	// Create the input for ListObjectsV2 operation
-	input := &s3.ListObjectsV2Input{
-		Bucket: &bucketName,
-	}
-
-	// Retrieve the objects in the bucket
-	resp, err := s3Client.ListObjectsV2(context.TODO(), input)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	// Calculate the summary information
-	itemCount := int64(len(resp.Contents))
-	totalSize := int64(0)
-
-	for _, obj := range resp.Contents {
-		totalSize += obj.Size
-	}
-
-	return itemCount, totalSize, nil
 }
