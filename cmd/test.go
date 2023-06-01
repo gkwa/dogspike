@@ -43,6 +43,13 @@ func init() {
 	// testCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }
 
+// Define a struct to hold bucket information
+type BucketInfo struct {
+	Name      string
+	ItemCount int64
+	TotalSize int64
+}
+
 func test() {
 	// Create a new AWS configuration
 	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-west-2"))
@@ -61,8 +68,110 @@ func test() {
 		return
 	}
 
-	// Iterate over each bucket and print its name
-	for _, bucket := range buckets.Buckets {
-		fmt.Printf("Bucket Name: %s\n", *bucket.Name)
+	// Create a slice to hold the bucket information
+	bucketList := make([]BucketInfo, 0)
+
+	// Iterate over each bucket and get its information
+	for _, bucket := range buckets {
+		bucketInfo := BucketInfo{
+			Name:      *bucket.Name,
+			ItemCount: 0,
+			TotalSize: 0,
+		}
+
+		// Get the bucket information
+		itemCount, totalSize, err := getBucketInfo(s3Client, *bucket.Name)
+		if err != nil {
+			fmt.Printf("Failed to retrieve information for bucket %s: %s\n", *bucket.Name, err)
+		} else {
+			bucketInfo.ItemCount = itemCount
+			bucketInfo.TotalSize = totalSize
+		}
+
+		// Append the bucket information to the list
+		bucketList = append(bucketList, bucketInfo)
 	}
+
+	// Print the bucket information
+	for _, bucketInfo := range bucketList {
+		fmt.Printf("Bucket Name: %s\n", bucketInfo.Name)
+		fmt.Printf("Item Count: %d\n", bucketInfo.ItemCount)
+		fmt.Printf("Total Size: %s\n", formatSize(bucketInfo.TotalSize))
+		fmt.Println()
+	}
+
+}
+
+func doit2(bucketName string) {
+	// Create a new AWS configuration
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-west-2"))
+	if err != nil {
+		fmt.Println("Failed to load AWS configuration:", err)
+		return
+	}
+
+	// Create an S3 client
+	s3Client := s3.NewFromConfig(cfg)
+
+	// Create the input for ListObjectsV2 operation
+	input := &s3.ListObjectsV2Input{
+		Bucket: &bucketName,
+	}
+
+	// Retrieve the objects in the bucket
+	resp, err := s3Client.ListObjectsV2(context.TODO(), input)
+	if err != nil {
+		fmt.Println("Failed to retrieve objects:", err)
+		return
+	}
+
+	// Calculate the summary information
+	totalSize := int64(0)
+	totalObjects := int64(0)
+
+	for _, obj := range resp.Contents {
+		totalSize += obj.Size
+		totalObjects++
+	}
+
+	fmt.Printf("Summary for bucket '%s':\n", bucketName)
+	fmt.Printf("Total Size: %s\n", formatSize(totalSize))
+	fmt.Printf("Total Objects: %d\n", totalObjects)
+}
+
+// Helper function to format the size in a human-readable format
+func formatSize(size int64) string {
+	const unit = 1024
+	if size < unit {
+		return fmt.Sprintf("%d B", size)
+	}
+	div, exp := int64(unit), 0
+	for n := size / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.2f %ciB", float64(size)/float64(div), "KMGTPE"[exp])
+}
+
+func getBucketInfo(s3Client *s3.Client, bucketName string) (int64, int64, error) {
+	// Create the input for ListObjectsV2 operation
+	input := &s3.ListObjectsV2Input{
+		Bucket: &bucketName,
+	}
+
+	// Retrieve the objects in the bucket
+	resp, err := s3Client.ListObjectsV2(context.TODO(), input)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	// Calculate the summary information
+	itemCount := int64(len(resp.Contents))
+	totalSize := int64(0)
+
+	for _, obj := range resp.Contents {
+		totalSize += obj.Size
+	}
+
+	return itemCount, totalSize, nil
 }
