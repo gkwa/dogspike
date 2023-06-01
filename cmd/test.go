@@ -8,8 +8,8 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/spf13/cobra"
 )
@@ -69,47 +69,48 @@ func test() {
 		return
 	}
 
-	// Get the first two buckets
-	var selectedBuckets []*types.Bucket
-
-	if len(resp.Buckets) > 0 {
-		selectedBuckets = append(selectedBuckets, &resp.Buckets[0])
-
-		if len(resp.Buckets) > 1 {
-			selectedBuckets = append(selectedBuckets, &resp.Buckets[1])
-		}
-	}
-
 	// Create a slice to hold the bucket information
 	bucketList := make([]BucketInfo, 0)
 
-	// Iterate over each bucket and get its information
-	for _, bucket := range selectedBuckets {
+	// Iterate over each bucket
+	for _, bucket := range resp.Buckets {
+		// Create the input for ListObjectsV2 operation
+		input := &s3.ListObjectsV2Input{
+			Bucket: bucket.Name,
+		}
+
+		// Retrieve the objects in the bucket
+		objectResp, err := s3Client.ListObjectsV2(context.TODO(), input)
+		if err != nil {
+			fmt.Printf("Failed to retrieve objects for bucket '%s': %v\n", *bucket.Name, err)
+			continue
+		}
+
+		// Calculate the summary information
+		totalSize := int64(0)
+		totalObjects := int64(0)
+
+		for _, obj := range objectResp.Contents {
+			totalSize += obj.Size
+			totalObjects++
+		}
+
+		// Create a BucketInfo struct and add it to the bucketList
 		bucketInfo := BucketInfo{
 			Name:      *bucket.Name,
-			ItemCount: 0,
-			TotalSize: 0,
+			ItemCount: totalObjects,
+			TotalSize: totalSize,
 		}
 
-		// Get the bucket information
-		itemCount, totalSize, err := getBucketInfo(s3Client, *bucket.Name)
-		if err != nil {
-			fmt.Printf("Failed to retrieve information for bucket %s: %s\n", *bucket.Name, err)
-		} else {
-			bucketInfo.ItemCount = itemCount
-			bucketInfo.TotalSize = totalSize
-		}
-
-		// Append the bucket information to the list
 		bucketList = append(bucketList, bucketInfo)
-	}
 
-	// Print the bucket information
-	for _, bucketInfo := range bucketList {
-		fmt.Printf("Bucket Name: %s\n", bucketInfo.Name)
-		fmt.Printf("Item Count: %d\n", bucketInfo.ItemCount)
-		fmt.Printf("Total Size: %s\n", formatSize(bucketInfo.TotalSize))
-		fmt.Println()
+		// Print the bucket information
+		for _, bucketInfo := range bucketList {
+			fmt.Printf("Bucket Name: %s\n", bucketInfo.Name)
+			fmt.Printf("Item Count: %d\n", bucketInfo.ItemCount)
+			fmt.Printf("Total Size: %s\n", formatSize(bucketInfo.TotalSize))
+			fmt.Println()
+		}
 	}
 }
 
