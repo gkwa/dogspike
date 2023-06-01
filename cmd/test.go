@@ -9,6 +9,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/spf13/cobra"
 )
@@ -68,38 +69,21 @@ func test() {
 		return
 	}
 
-	// Create a slice to hold the bucket information
-	bucketList := make([]BucketInfo, 0)
+	// Get the first two buckets
+	var selectedBuckets []types.Bucket
 
-	// Iterate over each bucket and get its information
-	for _, bucket := range buckets {
-		bucketInfo := BucketInfo{
-			Name:      *bucket.Name,
-			ItemCount: 0,
-			TotalSize: 0,
+	if len(buckets.Buckets) > 0 {
+		selectedBuckets = append(selectedBuckets, buckets.Buckets[0])
+
+		if len(buckets.Buckets) > 1 {
+			selectedBuckets = append(selectedBuckets, buckets.Buckets[1])
 		}
-
-		// Get the bucket information
-		itemCount, totalSize, err := getBucketInfo(s3Client, *bucket.Name)
-		if err != nil {
-			fmt.Printf("Failed to retrieve information for bucket %s: %s\n", *bucket.Name, err)
-		} else {
-			bucketInfo.ItemCount = itemCount
-			bucketInfo.TotalSize = totalSize
-		}
-
-		// Append the bucket information to the list
-		bucketList = append(bucketList, bucketInfo)
 	}
 
-	// Print the bucket information
-	for _, bucketInfo := range bucketList {
-		fmt.Printf("Bucket Name: %s\n", bucketInfo.Name)
-		fmt.Printf("Item Count: %d\n", bucketInfo.ItemCount)
-		fmt.Printf("Total Size: %s\n", formatSize(bucketInfo.TotalSize))
-		fmt.Println()
+	// Iterate over each bucket and print its name
+	for _, bucket := range selectedBuckets {
+		doit2(*bucket.Name)
 	}
-
 }
 
 func doit2(bucketName string) {
@@ -151,27 +135,4 @@ func formatSize(size int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.2f %ciB", float64(size)/float64(div), "KMGTPE"[exp])
-}
-
-func getBucketInfo(s3Client *s3.Client, bucketName string) (int64, int64, error) {
-	// Create the input for ListObjectsV2 operation
-	input := &s3.ListObjectsV2Input{
-		Bucket: &bucketName,
-	}
-
-	// Retrieve the objects in the bucket
-	resp, err := s3Client.ListObjectsV2(context.TODO(), input)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	// Calculate the summary information
-	itemCount := int64(len(resp.Contents))
-	totalSize := int64(0)
-
-	for _, obj := range resp.Contents {
-		totalSize += obj.Size
-	}
-
-	return itemCount, totalSize, nil
 }
