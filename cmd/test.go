@@ -10,7 +10,6 @@ import (
 	"os"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -28,7 +27,6 @@ Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("test called")
 		test()
 	},
 }
@@ -60,6 +58,13 @@ type FailedBucket struct {
 	Failure string
 }
 
+// Modify the SuccessBucket struct to include metrics
+type SuccessBucket struct {
+	Name      string
+	ItemCount int64
+	TotalSize int64
+}
+
 func test() {
 	// Create a new AWS configuration
 	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-west-2"))
@@ -78,10 +83,16 @@ func test() {
 		return
 	}
 
-	// Read the list of failed buckets from file
+	// Read the list of failed and successful buckets from file
 	failedBuckets, err := readFailedBucketsFromFile()
 	if err != nil {
 		fmt.Println("Failed to read failed buckets from file:", err)
+		return
+	}
+
+	successBuckets, err := readSuccessBucketsFromFile()
+	if err != nil {
+		fmt.Println("Failed to read success buckets from file:", err)
 		// return
 	}
 
@@ -90,27 +101,43 @@ func test() {
 
 	// Iterate over each bucket
 	for _, bucket := range resp.Buckets {
+		bucketName := *bucket.Name
+
 		// Skip the bucket if it is in the failed buckets list
-		if containsBucket(failedBuckets, *bucket.Name) {
+		if containsBucket(failedBuckets, *bucket.Name) || containsBucket(successBuckets, *bucket.Name) {
 			continue
 		}
 
-		itemCount, totalSize, err := getBucketInfo(s3Client, *bucket.Name)
+		// Skip the bucket if it is in the success buckets list
+		if containsBucket(successBuckets, bucketName) {
+			continue
+		}
+
+		itemCount, totalSize, err := getBucketInfo(s3Client, bucketName)
 		if err != nil {
-			fmt.Printf("Failed to retrieve objects for bucket '%s': %v\n", *bucket.Name, err)
+			fmt.Printf("Failed to retrieve objects for bucket '%s': %v\n", bucketName, err)
 			// Add the bucket to the failed buckets list
-			failedBuckets = append(failedBuckets, FailedBucket{Name: *bucket.Name, Failure: err.Error()})
+			failedBuckets = append(failedBuckets, FailedBucket{Name: bucketName, Failure: err.Error()})
 			continue
 		}
 
 		// Create a BucketInfo struct and add it to the bucketList
 		bucketInfo := BucketInfo{
-			Name:      *bucket.Name,
+			Name:      bucketName,
 			ItemCount: itemCount,
 			TotalSize: totalSize,
 		}
 
 		bucketList = append(bucketList, bucketInfo)
+
+		// Add the bucket to the success buckets list with metrics
+		successBucket := SuccessBucket{
+			Name:      bucketName,
+			ItemCount: itemCount,
+			TotalSize: totalSize,
+		}
+		successBuckets = append(successBuckets, successBucket)
+
 	}
 
 	// Sort the bucketList by TotalSize in descending order
@@ -134,10 +161,15 @@ func test() {
 		fmt.Println()
 	}
 
-	// Write the updated failed buckets list to file
+	// Write the updated failed and success buckets lists to file
 	err = writeFailedBucketsToFile(failedBuckets)
 	if err != nil {
 		fmt.Println("Failed to write failed buckets to file:", err)
+	}
+
+	err = writeSuccessBucketsToFile(successBuckets)
+	if err != nil {
+		fmt.Println("Failed to write success buckets to file:", err)
 	}
 }
 
@@ -183,14 +215,49 @@ func readFailedBucketsFromFile() ([]FailedBucket, error) {
 }
 
 func writeFailedBucketsToFile(failedBuckets []FailedBucket) error {
-	// Create or truncate the file
+	// Open the file
 	file, err := os.OpenFile("failed_buckets.json", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	data, err := json.MarshalIndent(failedBuckets, "", "  ")
+	// Encode the failedBuckets to JSON and write to file
+	err = json.NewEncoder(file).Encode(failedBuckets)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func readSuccessBucketsFromFile() ([]SuccessBucket, error) {
+	// Open the file
+	file, err := os.OpenFile("success_buckets.json", os.O_RDONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	// Decode the JSON data from file
+	var successBuckets []SuccessBucket
+	err = json.NewDecoder(file).Decode(&successBuckets)
+	if err != nil {
+		return nil, err
+	}
+
+	return successBuckets, nil
+}
+
+func writeSuccessBucketsToFile(successBuckets []SuccessBucket) error {
+	// Create or truncate the file
+	file, err := os.OpenFile("success_buckets.json", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	data, err := json.MarshalIndent(successBuckets, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -203,28 +270,33 @@ func writeFailedBucketsToFile(failedBuckets []FailedBucket) error {
 	return nil
 }
 
-func containsBucket(failedBuckets []FailedBucket, bucketName string) bool {
-	for _, failedBucket := range failedBuckets {
-		if failedBucket.Name == bucketName {
-			return true
+func containsBucket(bucketList interface{}, bucketName string) bool {
+	switch bucketList := bucketList.(type) {
+	case []FailedBucket:
+		for _, bucket := range bucketList {
+			if bucket.Name == bucketName {
+				return true
+			}
+		}
+	case []SuccessBucket:
+		for _, bucket := range bucketList {
+			if bucket.Name == bucketName {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// Helper function to format the size with thousand separators
-func formatBytes(size int64) string {
-	str := strconv.FormatInt(size, 10)
-	var formattedBytes []string
-	for i := len(str) - 1; i >= 0; i-- {
-		formattedBytes = append(formattedBytes, string(str[i]))
-		if (len(str)-i)%3 == 0 && i != 0 {
-			formattedBytes = append(formattedBytes, ",")
-		}
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return strconv.FormatInt(bytes, 10)
 	}
-	// Reverse the order of characters
-	for i, j := 0, len(formattedBytes)-1; i < j; i, j = i+1, j-1 {
-		formattedBytes[i], formattedBytes[j] = formattedBytes[j], formattedBytes[i]
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
 	}
-	return strings.Join(formattedBytes, "")
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
