@@ -6,7 +6,7 @@ toolchain go1.23.2
 
 require (
 	github.com/aws/aws-sdk-go-v2/config v1.28.0
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.66.0
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.66.1
 	github.com/spf13/cobra v1.8.1
 	github.com/spf13/viper v1.19.0
 )
