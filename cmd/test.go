@@ -88,7 +88,9 @@ func getBucketInfo(s3Client *s3.Client, bucketName string) (int64, int64, error)
 	totalSize := int64(0)
 
 	for _, obj := range resp.Contents {
-		totalSize += obj.Size
+		if obj.Size != nil {
+			totalSize += *obj.Size
+		}
 	}
 
 	return itemCount, totalSize, nil
