@@ -2,7 +2,7 @@ module github.com/taylormonacelli/dogspike
 
 go 1.23.0
 
-toolchain go1.25.6
+toolchain go1.25.7
 
 require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.7
